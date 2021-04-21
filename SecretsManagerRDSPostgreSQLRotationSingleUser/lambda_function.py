@@ -49,8 +49,9 @@ def lambda_handler(event, context):
     token = event['ClientRequestToken']
     step = event['Step']
 
-    # Setup the client
+    # Setup the clients
     service_client = boto3.client('secretsmanager', endpoint_url=os.environ['SECRETS_MANAGER_ENDPOINT'])
+    rds_client = boto3.client('rds')
 
     # Make sure the version is staged correctly
     metadata = service_client.describe_secret(SecretId=arn)
@@ -79,7 +80,7 @@ def lambda_handler(event, context):
         test_secret(service_client, arn, token)
 
     elif step == "finishSecret":
-        finish_secret(service_client, arn, token)
+        finish_secret(service_client, arn, token, rds_client)
 
     else:
         logger.error("lambda_handler: Invalid step parameter %s for secret %s" % (step, arn))
@@ -219,7 +220,7 @@ def test_secret(service_client, arn, token):
         raise ValueError("Unable to log into database with pending secret of secret ARN %s" % arn)
 
 
-def finish_secret(service_client, arn, token):
+def finish_secret(service_client, arn, token, rds_client):
     """Finish the rotation by marking the pending secret as current
 
     This method finishes the secret rotation by staging the secret staged AWSPENDING with the AWSCURRENT stage.
@@ -243,6 +244,14 @@ def finish_secret(service_client, arn, token):
                 return
             current_version = version
             break
+
+    # Second, bust the credentials cache by toggling the Data API if turned on
+    secret_dict = get_secret_dict(service_client, arn, "AWSPENDING", token)
+    db_cluster_identifier = secret_dict['host'].split(".")[0]
+    clusters_metadata = rds_client.describe_db_clusters(DBClusterIdentifier=db_cluster_identifier)
+    if clusters_metadata and 'DBClusters' in clusters_metadata and len(clusters_metadata['DBClusters']) > 0 and clusters_metadata['DBClusters'][0]['HttpEndpointEnabled']:
+        rds_client.modify_db_cluster(DBClusterIdentifier=db_cluster_identifier,EnableHttpEndpoint=False)
+        rds_client.modify_db_cluster(DBClusterIdentifier=db_cluster_identifier,EnableHttpEndpoint=True)
 
     # Finalize by staging the secret version current
     service_client.update_secret_version_stage(SecretId=arn, VersionStage="AWSCURRENT", MoveToVersionId=token, RemoveFromVersionId=current_version)

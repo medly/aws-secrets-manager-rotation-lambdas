@@ -7,6 +7,7 @@ import logging
 import os
 import pg
 import pgdb
+import sys
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -274,10 +275,13 @@ def finish_secret(service_client, arn, token, rds_client):
     # Second, bust the credentials cache by toggling the Data API if turned on
     secret_dict = get_secret_dict(service_client, arn, "AWSPENDING", token)
     db_cluster_identifier = secret_dict['host'].split(".")[0]
-    clusters_metadata = rds_client.describe_db_clusters(DBClusterIdentifier=db_cluster_identifier)
-    if clusters_metadata and 'DBClusters' in clusters_metadata and len(clusters_metadata['DBClusters']) > 0 and clusters_metadata['DBClusters'][0]['HttpEndpointEnabled']:
-        rds_client.modify_db_cluster(DBClusterIdentifier=db_cluster_identifier,EnableHttpEndpoint=False)
-        rds_client.modify_db_cluster(DBClusterIdentifier=db_cluster_identifier,EnableHttpEndpoint=True)
+    try:
+        clusters_metadata = rds_client.describe_db_clusters(DBClusterIdentifier=db_cluster_identifier)
+        if clusters_metadata and 'DBClusters' in clusters_metadata and len(clusters_metadata['DBClusters']) > 0 and clusters_metadata['DBClusters'][0]['HttpEndpointEnabled']:
+            rds_client.modify_db_cluster(DBClusterIdentifier=db_cluster_identifier,EnableHttpEndpoint=False)
+            rds_client.modify_db_cluster(DBClusterIdentifier=db_cluster_identifier,EnableHttpEndpoint=True)
+    except:
+        logger.warn("Unable to check or restart the Data API\n%s" % sys.exc_info()[0])
 
     # Finalize by staging the secret version current
     service_client.update_secret_version_stage(SecretId=arn, VersionStage="AWSCURRENT", MoveToVersionId=token, RemoveFromVersionId=current_version)
